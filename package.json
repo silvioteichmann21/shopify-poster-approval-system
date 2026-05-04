@@ -1,0 +1,20 @@
+{
+  "name": "poster-approval-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.6.12"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260327.0",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.12.0"
+  }
+}
+

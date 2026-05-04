@@ -1,0 +1,47 @@
+name = "poster-approval-worker"
+main = "src/index.ts"
+compatibility_date = "2026-04-01"
+
+[vars]
+# Optional: lock this Worker to a single shop, e.g. "socialorbitstudios-com.myshopify.com"
+# If blank, OAuth install will store token per-shop and admin UI will require shop input.
+SHOPIFY_SHOP_DOMAIN = "csrgv2-5x.myshopify.com"
+# Admin API version for REST calls
+SHOPIFY_API_VERSION = "2026-01"
+# OAuth app client id (API key) from Shopify Dev Dashboard
+SHOPIFY_API_KEY = "498e095cc6115fe88a6d54b7327efb39"
+# Optional: restrict CORS for API endpoints (leave empty for same-origin only)
+PUBLIC_BASE_URL = "https://poster-approval-worker.socialorbit-studios.workers.dev"
+# Optional: where admin notifications should go (email address shown in UI only)
+ADMIN_NOTIFY_EMAIL = "socialorbitstudios@gmail.com"
+# Optional: where poster reservation lead notifications should go (Klaviyo profile email).
+# If blank, falls back to ADMIN_NOTIFY_EMAIL.
+LEAD_NOTIFY_EMAIL = "socialorbitstudios@gmail.com"
+# Optional: full URL of your Shopify page that uses the poster-approval bridge template (no trailing slash)
+# Example: https://socialorbitstudios.com/pages/poster-approval
+THEME_APPROVAL_PAGE_URL = ""
+
+# --- OpenPhone SMS automation ---
+# Store secrets via:
+#   wrangler secret put OPENPHONE_API_KEY
+#   wrangler secret put OPENPHONE_WEBHOOK_SIGNING_SECRET   (preferred) OR OPENPHONE_WEBHOOK_SECRET
+#   wrangler secret put KLAVIYO_WEBHOOK_SECRET            (recommended)
+OPENPHONE_FROM_NUMBER_ID = "PNBC7srnvV" # OpenPhone number id
+
+[[d1_databases]]
+binding = "DB"
+database_name = "poster_approvals"
+database_id = "a4c02353-f37d-4115-a96c-4c028421a1dc"
+
+[durable_objects]
+bindings = [
+  { name = "SMS_AUTOMATION", class_name = "SmsAutomation" }
+]
+
+[[migrations]]
+tag = ""
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SmsAutomation"]
+
