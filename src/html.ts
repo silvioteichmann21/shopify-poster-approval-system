@@ -4,6 +4,29 @@ function esc(s: string) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 }
 
+export function renderPreviewErrorPage(title: string, message: string) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${esc(title)} — Social Orbit Studios</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 48px 24px; background: #050505; color: #f0ede8; line-height: 1.6; }
+    .wrap { max-width: 520px; margin: 0 auto; text-align: center; }
+    h1 { font-size: 1.5rem; margin: 0 0 12px; }
+    p { color: rgba(240,237,232,0.75); margin: 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>${esc(title)}</h1>
+    <p>${esc(message)}</p>
+  </div>
+</body>
+</html>`;
+}
+
 export function renderHomePage(opts: { baseUrl: string }) {
   const b = esc(opts.baseUrl.replace(/\/$/, ''));
   return `<!DOCTYPE html>
@@ -29,6 +52,7 @@ export function renderHomePage(opts: { baseUrl: string }) {
     <h1>Custom Poster System</h1>
     <p>Backend for poster previews, customer approval, and payment capture. If you opened this from Shopify Admin, use the links below.</p>
     <ul>
+      <li><a href="${b}/portal">Lead Portal</a> — reservation leads → preview links for customers</li>
       <li><a href="${b}/admin">Poster Approval Admin</a> — create preview links for orders</li>
       <li><code>/approve/&lt;token&gt;</code> — customer review page (use link from admin)</li>
       <li><a href="${b}/auth/install?shop=YOURSHOP.myshopify.com">OAuth install</a> — replace YOURSHOP if reinstalling</li>

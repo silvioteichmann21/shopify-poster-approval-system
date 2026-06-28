@@ -39,20 +39,6 @@ npx wrangler secret put KLAVIYO_PRIVATE_API_KEY   # optional
 Deploy: `npx wrangler deploy`  
 Install on store: open `/auth/install?shop=YOURSHOP.myshopify.com` or your Partner **custom install link**.
 
-### Poster lead (page 1 + page 2 form → merchant notification)
-
-`POST /api/poster-lead` (public, CORS) accepts JSON: `{ "posterReservationData": { ... } }` with everything from `localStorage` after the customer submits page 2.
-
-- **Klaviyo:** fires metric **`poster_lead_submitted`** on profile **`ADMIN_NOTIFY_EMAIL`** with `lead_summary` plus all fields (create a Flow to email you).
-- **`ADMIN_WEBHOOK_URL`:** receives `event: poster_lead_submitted` + payload.
-- **Resend (optional):** set secrets/vars `RESEND_API_KEY`, `POSTER_LEAD_MAIL_FROM` (verified sender), `POSTER_LEAD_MAIL_TO` (defaults to `ADMIN_NOTIFY_EMAIL`).
-
-**Theme:** In the “Poster reservation form” block, set **Lead API URL** to `https://YOUR_WORKER/api/poster-lead`. Optional **Lead API secret** if you set `POSTER_LEAD_SECRET` on the Worker.
-
-**Origin lock (recommended):** `POSTER_LEAD_ALLOWED_ORIGINS=https://yourstore.com,https://www.yourstore.com` in Worker vars.
-
-If Lead API URL is empty, the theme falls back to Shopify’s **`/contact`** form (`contact[body]`, etc.).
-
 ### Klaviyo
 
 With `KLAVIYO_PRIVATE_API_KEY` set, the Worker sends **Events API** events with a **profile email** so flows can trigger.

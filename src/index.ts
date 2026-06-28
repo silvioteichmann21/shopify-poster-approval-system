@@ -1,5 +1,25 @@
 import { Hono } from 'hono';
-import { renderAdminPage, renderApprovePage, renderHomePage } from './html';
+import { renderAdminPage, renderApprovePage, renderHomePage, renderPreviewErrorPage } from './html';
+import { renderPortalPage } from './portal_html';
+import {
+  getLead,
+  insertLead,
+  isValidPreviewImageUrl,
+  normalizePreviewImageUrl,
+  leadToPortalJson,
+  leadToPublicPreview,
+  listLeads,
+  updateLeadPreview,
+  updateLeadStatus,
+  type LeadInsertPayload,
+  type LeadRow,
+} from './leads';
+import {
+  extensionForImageType,
+  previewImagePublicUrl,
+  previewImageStorageKey,
+  validatePreviewUpload,
+} from './preview_images';
 import {
   nowIso,
   badRequest,
@@ -247,15 +267,37 @@ async function notifyAdminOfCustomerAction(
 
 app.get('/', (c) => c.html(renderHomePage({ baseUrl: publicBaseUrl(c) })));
 
-function corsHeaders(origin: string | null | undefined) {
+function corsHeaders(origin: string | null | undefined, methods = 'POST,OPTIONS') {
   // Storefronts may call cross-origin (Shopify domain → workers.dev).
-  // We allow all origins here since this endpoint only triggers admin-side notifications.
   return {
     'access-control-allow-origin': origin || '*',
-    'access-control-allow-methods': 'POST,OPTIONS',
+    'access-control-allow-methods': methods,
     'access-control-allow-headers': 'content-type',
     'access-control-max-age': '86400',
   } as Record<string, string>;
+}
+
+function customerPreviewPageBase(env: Env) {
+  return (env.THEME_POSTER_PREVIEW_PAGE_URL || 'https://socialorbitstudios.com/pages/poster-preview').trim().replace(/\/$/, '');
+}
+
+function workerPublicBase(env: Env) {
+  return (env.PUBLIC_BASE_URL || 'https://poster-approval-worker.socialorbit-studios.workers.dev').trim().replace(/\/$/, '');
+}
+
+function buildLegacyShopifyPreviewUrl(env: Env, imageUrl: string, variantId: string) {
+  const page = customerPreviewPageBase(env);
+  const img = encodeURIComponent(normalizePreviewImageUrl(imageUrl));
+  return `${page}?img=${img}&variant=${encodeURIComponent(variantId)}`;
+}
+
+/** Customer link: img+variant on the store page (works with the current live theme). */
+function buildCustomerPreviewUrl(env: Env, row: LeadRow) {
+  const preview = leadToPublicPreview(row);
+  if (preview.ready && preview.preview_image_url && preview.variant_id) {
+    return buildLegacyShopifyPreviewUrl(env, preview.preview_image_url, String(preview.variant_id));
+  }
+  return `${customerPreviewPageBase(env)}?token=${encodeURIComponent(row.id)}`;
 }
 
 // NOTE: OpenPhone SMS is triggered directly from POST /api/poster-lead.
@@ -390,6 +432,17 @@ app.post('/api/poster-lead', async (c) => {
   const notifyEmail = (c.env.LEAD_NOTIFY_EMAIL || c.env.ADMIN_NOTIFY_EMAIL || '').trim();
   const key = c.env.KLAVIYO_PRIVATE_API_KEY;
   const { headline, details } = summarizeLeadPayload(payload);
+
+  const leadId = newToken();
+  let lead_saved = false;
+  let lead_save_error: string | null = null;
+  try {
+    await insertLead(getD1(c.env), leadId, payload as LeadInsertPayload);
+    lead_saved = true;
+  } catch (e) {
+    lead_save_error = e instanceof Error ? e.message : String(e);
+  }
+
   const klaviyo =
     key && notifyEmail && isValidKlaviyoProfileEmail(notifyEmail)
       ? await klaviyoNotifyAdmin(
@@ -408,6 +461,10 @@ app.post('/api/poster-lead', async (c) => {
   return new Response(
     JSON.stringify({
       ok: true,
+      lead_id: lead_saved ? leadId : null,
+      portal_url: lead_saved ? `${publicBaseUrl(c)}/portal` : null,
+      lead_saved,
+      lead_save_error,
       notify_email: notifyEmail || null,
       klaviyo,
       openphone_configured,
@@ -805,6 +862,210 @@ app.post('/admin/api/upsert', async (c) => {
       ? `Send customer: ${theme_bridge_url}`
       : `Set THEME_APPROVAL_PAGE_URL in wrangler.toml for a ready-to-send store link, or use: https://YOUR_DOMAIN/pages/YOUR_PAGE_HANDLE?token=${token}`,
     klaviyo_customer: klaviyoCustomerSummary(c.env, order.email, klaviyo.customer),
+  });
+});
+
+// --- Lead portal (reservation flow) ---
+
+app.get('/portal/api/config', async (c) => {
+  const ok = await requireAdmin(c.req.raw, c.env);
+  if (!ok) return unauthorized();
+  return json({
+    ok: true,
+    upload_enabled: Boolean(c.env.PREVIEW_IMAGES),
+  });
+});
+
+app.get('/portal', async (c) => {
+  const ok = await requireAdmin(c.req.raw, c.env);
+  if (!ok) {
+    return new Response('Auth required', {
+      status: 401,
+      headers: { 'www-authenticate': 'Basic realm="Poster Lead Portal", charset="UTF-8"' },
+    });
+  }
+  return c.html(
+    renderPortalPage({
+      previewPageBase: customerPreviewPageBase(c.env),
+      publicBaseUrl: workerPublicBase(c.env),
+    })
+  );
+});
+
+app.get('/portal/api/leads', async (c) => {
+  const ok = await requireAdmin(c.req.raw, c.env);
+  if (!ok) return unauthorized();
+  const rows = await listLeads(getD1(c.env));
+  return json({
+    ok: true,
+    leads: rows.map((row) => {
+      const summary = leadToPortalJson(row, buildCustomerPreviewUrl(c.env, row));
+      return {
+        id: summary.id,
+        status: summary.status,
+        first_name: summary.first_name,
+        phone_number: summary.phone_number,
+        vehicle: summary.vehicle,
+        finish: summary.finish,
+        size: summary.size,
+        design: summary.design,
+        preview_image_url: summary.preview_image_url,
+        customer_preview_url: summary.customer_preview_url,
+        created_at: summary.created_at,
+      };
+    }),
+  });
+});
+
+app.get('/portal/api/leads/:id', async (c) => {
+  const ok = await requireAdmin(c.req.raw, c.env);
+  if (!ok) return unauthorized();
+  const row = await getLead(getD1(c.env), c.req.param('id'));
+  if (!row) return notFound('Lead not found.');
+  return json({
+    ok: true,
+    lead: leadToPortalJson(row, buildCustomerPreviewUrl(c.env, row)),
+  });
+});
+
+app.post('/portal/api/leads/:id/preview', async (c) => {
+  const ok = await requireAdmin(c.req.raw, c.env);
+  if (!ok) return unauthorized();
+  const id = c.req.param('id');
+  const row = await getLead(getD1(c.env), id);
+  if (!row) return notFound('Lead not found.');
+  const body = (await c.req.json().catch(() => null)) as { preview_image_url?: string } | null;
+  const preview_image_url = (body?.preview_image_url || '').trim();
+  if (!preview_image_url) return badRequest('Missing preview_image_url.');
+  const imageCheck = isValidPreviewImageUrl(preview_image_url);
+  if (!imageCheck.ok) return badRequest(imageCheck.error);
+  if (!row.variant_id) return badRequest('This lead has no Shopify variant mapped. Check the reservation form saved variantId.');
+  await updateLeadPreview(getD1(c.env), id, preview_image_url);
+  const updated = await getLead(getD1(c.env), id);
+  if (!updated) return notFound('Lead not found.');
+  const customer_preview_url = buildCustomerPreviewUrl(c.env, updated);
+  return json({
+    ok: true,
+    customer_preview_url,
+    lead: leadToPortalJson(updated, customer_preview_url),
+  });
+});
+
+app.post('/portal/api/leads/:id/upload', async (c) => {
+  const ok = await requireAdmin(c.req.raw, c.env);
+  if (!ok) return unauthorized();
+
+  const bucket = c.env.PREVIEW_IMAGES;
+  if (!bucket) {
+    return badRequest('Image storage is not configured. Create R2 bucket poster-preview-images and redeploy.');
+  }
+
+  const id = c.req.param('id');
+  const row = await getLead(getD1(c.env), id);
+  if (!row) return notFound('Lead not found.');
+  if (!row.variant_id) {
+    return badRequest('This lead has no Shopify variant mapped. Check the reservation form saved variantId.');
+  }
+
+  const formData = await c.req.formData().catch(() => null);
+  const rawFile = formData?.get('file');
+  if (!rawFile || typeof rawFile === 'string') return badRequest('Choose an image file to upload.');
+  const file = rawFile as { type: string; size: number; arrayBuffer(): Promise<ArrayBuffer> };
+
+  const check = validatePreviewUpload(file);
+  if (!check.ok) return badRequest(check.error);
+
+  const ext = extensionForImageType(check.type);
+  const filename = `${Date.now()}.${ext}`;
+  const storageKey = previewImageStorageKey(id, filename);
+
+  await bucket.put(storageKey, await file.arrayBuffer(), {
+    httpMetadata: { contentType: check.type },
+  });
+
+  const preview_image_url = previewImagePublicUrl(publicBaseUrl(c), storageKey);
+  await updateLeadPreview(getD1(c.env), id, preview_image_url);
+
+  const updated = await getLead(getD1(c.env), id);
+  if (!updated) return notFound('Lead not found.');
+  const customer_preview_url = buildCustomerPreviewUrl(c.env, updated);
+  return json({
+    ok: true,
+    preview_image_url,
+    customer_preview_url,
+    lead: leadToPortalJson(updated, customer_preview_url),
+  });
+});
+
+app.post('/portal/api/leads/:id/sent', async (c) => {
+  const ok = await requireAdmin(c.req.raw, c.env);
+  if (!ok) return unauthorized();
+  const id = c.req.param('id');
+  const row = await getLead(getD1(c.env), id);
+  if (!row) return notFound('Lead not found.');
+  await updateLeadStatus(getD1(c.env), id, 'sent');
+  const updated = await getLead(getD1(c.env), id);
+  if (!updated) return notFound('Lead not found.');
+  const customer_preview_url = buildCustomerPreviewUrl(c.env, updated);
+  return json({
+    ok: true,
+    lead: leadToPortalJson(updated, customer_preview_url),
+  });
+});
+
+app.get('/preview-images/:leadId/:filename', async (c) => {
+  const bucket = c.env.PREVIEW_IMAGES;
+  if (!bucket) return notFound('Image not found.');
+  const storageKey = previewImageStorageKey(c.req.param('leadId'), c.req.param('filename'));
+  const object = await bucket.get(storageKey);
+  if (!object) return notFound('Image not found.');
+  const headers = new Headers();
+  headers.set('content-type', object.httpMetadata?.contentType || 'image/png');
+  headers.set('cache-control', 'public, max-age=31536000, immutable');
+  return new Response(object.body, { headers });
+});
+
+app.get('/go-preview/:token', async (c) => {
+  const row = await getLead(getD1(c.env), c.req.param('token'));
+  if (!row) {
+    return c.html(
+      renderPreviewErrorPage(
+        'Preview link not found',
+        'This preview link is invalid or has expired. Please contact us for a new link.'
+      ),
+      404
+    );
+  }
+  const preview = leadToPublicPreview(row);
+  if (!preview.ready || !preview.preview_image_url || !preview.variant_id) {
+    return c.html(
+      renderPreviewErrorPage(
+        'Preview not ready yet',
+        preview.message || 'Your poster preview is being prepared. We will send you a link soon.'
+      ),
+      200
+    );
+  }
+  return c.redirect(buildLegacyShopifyPreviewUrl(c.env, preview.preview_image_url, String(preview.variant_id)), 302);
+});
+
+app.options('/api/lead-preview/:token', (c) => {
+  const origin = c.req.header('origin') || null;
+  return new Response(null, { status: 204, headers: corsHeaders(origin, 'GET,OPTIONS') });
+});
+
+app.get('/api/lead-preview/:token', async (c) => {
+  const origin = c.req.header('origin') || null;
+  const row = await getLead(getD1(c.env), c.req.param('token'));
+  if (!row) {
+    return new Response(JSON.stringify({ ok: false, error: 'Preview link not found.' }), {
+      status: 404,
+      headers: { ...corsHeaders(origin, 'GET,OPTIONS'), 'content-type': 'application/json' },
+    });
+  }
+  return new Response(JSON.stringify(leadToPublicPreview(row)), {
+    status: 200,
+    headers: { ...corsHeaders(origin, 'GET,OPTIONS'), 'content-type': 'application/json' },
   });
 });
 

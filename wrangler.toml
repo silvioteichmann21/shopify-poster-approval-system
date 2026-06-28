@@ -20,6 +20,8 @@ LEAD_NOTIFY_EMAIL = "socialorbitstudios@gmail.com"
 # Optional: full URL of your Shopify page that uses the poster-approval bridge template (no trailing slash)
 # Example: https://socialorbitstudios.com/pages/poster-approval
 THEME_APPROVAL_PAGE_URL = ""
+# Customer poster preview page (token links from lead portal)
+THEME_POSTER_PREVIEW_PAGE_URL = "https://socialorbitstudios.com/pages/poster-preview"
 
 # --- OpenPhone SMS automation ---
 # Store secrets via:
@@ -27,6 +29,13 @@ THEME_APPROVAL_PAGE_URL = ""
 #   wrangler secret put OPENPHONE_WEBHOOK_SIGNING_SECRET   (preferred) OR OPENPHONE_WEBHOOK_SECRET
 #   wrangler secret put KLAVIYO_WEBHOOK_SECRET            (recommended)
 OPENPHONE_FROM_NUMBER_ID = "PNBC7srnvV" # OpenPhone number id
+
+# Direct image upload (optional). After enabling R2 in Cloudflare Dashboard:
+#   npx wrangler r2 bucket create poster-preview-images
+# Uncomment the block below and redeploy:
+# [[r2_buckets]]
+# binding = "PREVIEW_IMAGES"
+# bucket_name = "poster-preview-images"
 
 [[d1_databases]]
 binding = "DB"
